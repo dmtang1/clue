@@ -1,0 +1,8 @@
+{
+  "name": "Clue Sheet",
+  "short_name": "Clue Sheet",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#14221c",
+  "theme_color": "#14221c"
+}
