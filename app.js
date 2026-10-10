@@ -13,7 +13,7 @@
       setup: {
         step: "players",
         players: [
-          { id: "p1", name: "" },
+          { id: "p1", name: "Me" },
           { id: "p2", name: "" },
           { id: "p3", name: "" },
           { id: "p4", name: "" },
@@ -29,6 +29,7 @@
       modal: null,
       toast: null,
       flash: [],
+      historyOpen: false,
     };
   }
 
@@ -43,7 +44,13 @@
         screen: data.screen === "play" && data.game ? "play" : "setup",
         setup: {
           step: data.setup.step || "players",
-          players: data.setup.players,
+          players: data.setup.players.map((player) => {
+            const youId = data.setup.youId || data.setup.players[0].id;
+            if (player.id === youId && !String(player.name || "").trim()) {
+              return { ...player, name: "Me" };
+            }
+            return player;
+          }),
           youId: data.setup.youId || data.setup.players[0].id,
           yourHand: data.setup.yourHand || [],
           publicCards: data.setup.publicCards || [],
@@ -55,6 +62,7 @@
         modal: null,
         toast: null,
         flash: [],
+        historyOpen: false,
       };
     } catch (error) {
       return null;
@@ -259,30 +267,32 @@
     const chances = E.holdChances(game, analysis);
     const status = E.envelopeStatus(analysis);
     const canUndo = game.suggestions.length > 0;
+    const guessCount = game.suggestions.length;
     return `
-      <div class="screen">
-        <header class="topbar">
-          <div class="title-row">
-            <h1>Clue Sheet</h1>
-            <div class="header-actions">
-              <button type="button" class="text-btn" data-action="undo" ${canUndo ? "" : "disabled"}>Undo</button>
-              <button type="button" class="text-btn" data-action="new-game">New</button>
-            </div>
-          </div>
+      <div class="screen play">
+        <header class="topbar play-top">
           ${renderSolution(status)}
-          <p class="legend">× ruled out · ✓ has it · a percent is the chance that column holds the card · corner numbers are guesses</p>
+          <div class="header-actions">
+            ${
+              guessCount
+                ? `<button type="button" class="text-btn" data-action="show-history" aria-label="${guessCount} guesses">Guesses</button>`
+                : ""
+            }
+            <button type="button" class="text-btn" data-action="undo" ${canUndo ? "" : "disabled"}>Undo</button>
+            <button type="button" class="text-btn" data-action="new-game">New</button>
+          </div>
         </header>
         <main class="sheet-scroll">
           <div class="paper${state.wizard ? " is-logging" : ""}">
             ${renderGrid(game, analysis, chances)}
-            ${renderHistory(game)}
           </div>
         </main>
         <footer class="bar">
           ${renderDock(game, analysis)}
         </footer>
       </div>
-      ${renderDetail(game, analysis, chances)}`;
+      ${renderDetail(game, analysis, chances)}
+      ${renderHistoryPanel(game)}`;
   }
 
   function renderSolution(status) {
@@ -331,8 +341,7 @@
     const players = sheetPlayers(game);
     const head = players
       .map((player, index) => {
-        const me = player.isYou ? `<span class="col-me">Me</span>` : "";
-        return `<th class="player${player.isYou ? " is-you" : ""}" style="--player:${colors[index % colors.length]}"><span class="col-name">${esc(player.name)}</span>${me}</th>`;
+        return `<th class="player${player.isYou ? " is-you" : ""}" style="--player:${colors[index % colors.length]}" aria-label="${esc(player.name + (player.isYou ? ", you" : ""))}"><span class="col-name">${esc(player.name)}</span></th>`;
       })
       .join("");
     const body = E.CATEGORIES.map((category) => {
@@ -342,7 +351,7 @@
       const rows = category.cards
         .map((card) => {
           const owner = analysis.owners[card.id];
-          const tag = ownerTag(owner, game) || envelopeTag(chances, game, card.id);
+          const tag = rowTag(owner, chances, game, card.id);
           const classes = ["card-row"];
           if (owner?.kind === "you") classes.push("is-yours");
           if (owner?.kind === "public") classes.push("is-shared");
@@ -360,8 +369,8 @@
             })
             .join("");
           return `<tr id="row-${card.id}" class="${classes.join(" ")}" data-action="${rowAction}" data-card="${card.id}">
-            <th class="name-cell" scope="row"><button type="button" class="row-hit" data-action="${rowAction}" data-card="${card.id}"><span class="card-name">${esc(card.name)}</span>${
-              tag ? `<span class="card-tag">${esc(tag)}</span>` : ""
+            <th class="name-cell" scope="row"><button type="button" class="row-hit" data-action="${rowAction}" data-card="${card.id}"><span class="card-name">${esc(card.short)}</span>${
+              tag ? `<span class="card-tag" title="${esc(tag.title)}">${esc(tag.text)}</span>` : ""
             }</button></th>
             ${cells}
           </tr>`;
@@ -446,10 +455,14 @@
     return left;
   }
 
-  function envelopeTag(chances, game, cardId) {
+  function rowTag(owner, chances, game, cardId) {
+    const owned = ownerTag(owner, game);
+    if (owned === "Envelope") return { text: "Env", title: "In the envelope" };
+    if (owned) return { text: owned, title: owned };
     const value = envelopeChance(chances, game, cardId);
-    if (value <= 0.0005 || value >= 0.9995) return "";
-    return `${formatChance(value)} envelope`;
+    if (value <= 0.0005 || value >= 0.9995) return null;
+    const pct = formatChance(value);
+    return { text: pct, title: `${pct} envelope` };
   }
 
   function cornerNums(nums) {
@@ -466,10 +479,8 @@
     return [];
   }
 
-  function renderHistory(game) {
-    if (!game.suggestions.length) {
-      return `<section class="history"><h2>Guesses</h2><p class="guess-result">Logged guesses show up here so a number on the sheet points back at the ask.</p></section>`;
-    }
+  function renderHistoryPanel(game) {
+    if (!state.historyOpen) return "";
     const items = game.suggestions
       .map((suggestion, index) => {
         const asker = game.players.find((player) => player.id === suggestion.suggesterId);
@@ -494,7 +505,19 @@
         </li>`;
       })
       .join("");
-    return `<section class="history"><h2>Guesses</h2><ol class="stack" style="list-style:none;padding:0;margin:0;">${items}</ol></section>`;
+    const body = items
+      ? `<ol class="guess-list">${items}</ol>`
+      : `<p class="reason">Logged guesses show up here so a number on the sheet points back at the ask.</p>`;
+    return `
+      <div class="scrim" data-action="close-history">
+        <section class="panel" data-action="stop">
+          <div class="panel-bar">
+            <h2>Guesses</h2>
+            <button type="button" class="text-btn" data-action="close-history" style="color:#241c14">Close</button>
+          </div>
+          ${body}
+        </section>
+      </div>`;
   }
 
   function renderDetail(game, analysis, chances) {
@@ -551,13 +574,19 @@
     const next = game.suggestions.length + 1;
     if (!state.wizard) {
       const ask = E.recommendAsk(game, analysis);
-      if (!ask) return `<button type="button" class="primary" data-action="log-guess">Log guess ${next}</button>`;
-      return `${renderAsk(ask)}<button type="button" class="ghost" data-action="log-guess">Log a different guess</button>`;
+      if (!ask) return `<button type="button" class="primary bar-log" data-action="log-guess">Log guess ${next}</button>`;
+      return renderAsk(ask);
     }
     const wizard = state.wizard;
     const cardsReady = Boolean(wizard.suspectId && wizard.weaponId && wizard.roomId);
     const asker = wizard.suggesterId ? playerById(game, wizard.suggesterId) : null;
-    const picked = `${cardShort(wizard.suspectId, "Suspect")} · ${cardShort(wizard.weaponId, "Weapon")} · ${cardShort(wizard.roomId, "Room")}`;
+    const pickingCards = !wizard.pendingId && !(cardsReady && asker);
+    const askers = game.players
+      .map((player) => {
+        const on = player.id === wizard.suggesterId;
+        return `<button type="button" class="chip${on ? " is-on" : ""}" data-action="pick-suggester" data-id="${esc(player.id)}" aria-pressed="${on}">${esc(player.name)}</button>`;
+      })
+      .join("");
     return `
       <div class="dock">
         <div class="dock-head">
@@ -565,17 +594,20 @@
           <span class="dock-title">${esc(dockTitle(game, asker, cardsReady))}</span>
           <button type="button" class="text-btn" data-action="wizard-back">Back</button>
         </div>
-        <div class="dock-row">
-          ${game.players
-            .map((player) => {
-              const on = player.id === wizard.suggesterId;
-              return `<button type="button" class="chip${on ? " is-on" : ""}" data-action="pick-suggester" data-id="${esc(player.id)}" aria-pressed="${on}">${esc(player.name)}</button>`;
-            })
-            .join("")}
-        </div>
-        <p class="dock-picked">${esc(picked)}</p>
-        ${cardsReady && asker ? renderShowerRow(game, analysis) : `<p class="dock-note">Tap a suspect, a weapon, and a room on the sheet.</p>`}
+        ${wizard.pendingId ? "" : renderSlots(wizard)}
+        ${pickingCards ? `<div class="dock-row">${askers}</div>` : renderShowerRow(game, analysis)}
       </div>`;
+  }
+
+  function renderSlots(wizard) {
+    const slots = [
+      [wizard.suspectId, "Suspect"],
+      [wizard.weaponId, "Weapon"],
+      [wizard.roomId, "Room"],
+    ];
+    return `<p class="dock-slots">${slots
+      .map(([id, fallback]) => `<span class="${id ? "is-set" : "is-empty"}">${esc(cardShort(id, fallback))}</span>`)
+      .join('<span class="ask-dot" aria-hidden="true">·</span>')}</p>`;
   }
 
   function renderAsk(ask) {
@@ -585,23 +617,26 @@
         return `<span class="ask-name${focus}">${esc(E.CARD_MAP[id].short)}</span>`;
       })
       .join('<span class="ask-dot" aria-hidden="true">·</span>');
+    const label = [ask.suspectId, ask.weaponId, ask.roomId].map((id) => E.CARD_MAP[id].short).join(", ");
     return `
-      <section class="ask-next" aria-label="Suggested ask">
-        <p class="ask-kicker">Ask on your turn</p>
-        <p class="ask-cards">${names}</p>
-        <p class="ask-reason">${esc(ask.reason)}</p>
-        <button type="button" class="primary" data-action="ask-this" data-suspect="${esc(ask.suspectId)}" data-weapon="${esc(ask.weaponId)}" data-room="${esc(ask.roomId)}" data-focus="${esc(ask.focusId)}">Ask this</button>
-      </section>`;
+      <div class="ask-bar">
+        <button type="button" class="ask-main" data-action="ask-this" data-suspect="${esc(ask.suspectId)}" data-weapon="${esc(ask.weaponId)}" data-room="${esc(ask.roomId)}" data-focus="${esc(ask.focusId)}" aria-label="${esc(`Ask ${label}. ${ask.reason}`)}">
+          <span class="ask-line">
+            <span class="ask-kicker">Ask</span>
+            <span class="ask-cards">${names}</span>
+          </span>
+          <span class="ask-reason">${esc(ask.reason)}</span>
+        </button>
+        <button type="button" class="text-btn ask-log" data-action="log-guess" aria-label="Log a different guess">Log</button>
+      </div>`;
   }
 
   function dockTitle(game, asker, cardsReady) {
     const wizard = state.wizard;
-    if (wizard.pendingId) {
-      return `Which card did ${playerById(game, wizard.pendingId).name} show you?`;
-    }
-    if (asker && cardsReady) return `${asker.name} asked. Who showed a card?`;
+    if (wizard.pendingId) return `Which card did ${playerById(game, wizard.pendingId).name} show?`;
+    if (asker && cardsReady) return "Who showed a card?";
     if (!asker) return "Who asked?";
-    return "Tap the three cards";
+    return `${asker.name} asked`;
   }
 
   function cardShort(cardId, fallback) {
@@ -624,7 +659,7 @@
             })
             .join("")}
         </div>
-        <p class="dock-note">Or tap that card on the sheet. A ✓ replaces the number once you know it.</p>`;
+        <p class="dock-note">Or tap that row on the sheet.</p>`;
     }
     const order = E.responseOrder(game.players, wizard.suggesterId);
     const youIndex = order.findIndex((player) => player.isYou);
@@ -697,6 +732,7 @@
     if (action === "load-example") return loadExample();
     if (action === "log-guess") {
       state.detailId = null;
+      state.historyOpen = false;
       state.wizard = blankWizard();
       render();
       return;
@@ -704,6 +740,7 @@
     if (action === "ask-this") {
       const you = state.game.players.find((player) => player.isYou);
       state.detailId = null;
+      state.historyOpen = false;
       state.wizard = {
         step: "log",
         suggesterId: you.id,
@@ -715,7 +752,18 @@
       };
       render();
       const row = document.getElementById("row-" + target.dataset.focus);
-      if (row) row.scrollIntoView({ block: "center" });
+      if (row) row.scrollIntoView({ block: "nearest", inline: "nearest" });
+      return;
+    }
+    if (action === "show-history") {
+      state.detailId = null;
+      state.historyOpen = true;
+      render();
+      return;
+    }
+    if (action === "close-history") {
+      state.historyOpen = false;
+      render();
       return;
     }
     if (action === "undo") return undo();
@@ -727,6 +775,7 @@
     }
     if (action === "confirm-yes") return confirmModal();
     if (action === "detail") {
+      state.historyOpen = false;
       state.detailId = target.dataset.card;
       render();
       return;
@@ -742,7 +791,7 @@
       state.detailId = null;
       render();
       const row = document.getElementById("row-" + target.dataset.card);
-      if (row) row.scrollIntoView({ block: "center" });
+      if (row) row.scrollIntoView({ block: "nearest", inline: "nearest" });
       return;
     }
     if (action === "wizard-back") return wizardBack();
@@ -945,6 +994,12 @@
       render();
       return;
     }
+    if (wizard.suggesterId && wizard.suspectId && wizard.weaponId && wizard.roomId) {
+      wizard.suggesterId = null;
+      wizard.responses = [];
+      render();
+      return;
+    }
     state.wizard = null;
     render();
   }
@@ -981,7 +1036,7 @@
       wizard.responses = [];
       render();
       const row = document.getElementById("row-" + wizard.suspectId);
-      if (row) row.scrollIntoView({ block: "nearest" });
+      if (row) row.scrollIntoView({ block: "nearest", inline: "nearest" });
       return;
     }
     wizard.pendingId = null;
