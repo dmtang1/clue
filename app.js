@@ -1,11 +1,15 @@
 (function () {
   const E = window.ClueEngine;
   const STORAGE_KEY = "clue-sheet-v1";
+  const SETTINGS_KEY = "clue-sheet-settings";
   const root = document.getElementById("app");
   const timers = { toast: 0, flash: 0 };
-  let scrollTop = 0;
+  let keepScroll = true;
+  let scrollGeneration = 0;
 
   const state = loadState() || freshState();
+  state.settings = loadSettings();
+  state.settingsOpen = false;
 
   function freshState() {
     return {
@@ -84,6 +88,23 @@
     }
   }
 
+  function loadSettings() {
+    try {
+      const data = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null");
+      return { showPercents: data?.showPercents === true };
+    } catch (error) {
+      return { showPercents: false };
+    }
+  }
+
+  function saveSettings() {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ showPercents: state.settings.showPercents }));
+    } catch (error) {
+      /* Private mode can block storage; the choice still holds for this visit. */
+    }
+  }
+
   function esc(value) {
     return String(value)
       .replace(/&/g, "&amp;")
@@ -111,18 +132,93 @@
     }, 1700);
   }
 
+  function scrollers() {
+    return [...document.querySelectorAll(".sheet-scroll, .setup-main, .wizard-main, .panel")];
+  }
+
+  function captureScroll() {
+    return {
+      x: window.scrollX,
+      y: window.scrollY,
+      nodes: scrollers().map((el) => ({
+        className: el.className,
+        top: el.scrollTop,
+        left: el.scrollLeft,
+      })),
+    };
+  }
+
+  function applyScroll(saved) {
+    if (!saved) return;
+    const nodes = scrollers();
+    const used = new Set();
+    saved.nodes.forEach((item) => {
+      const el = nodes.find((node) => !used.has(node) && node.className === item.className);
+      if (!el) return;
+      used.add(el);
+      el.scrollTop = item.top;
+      el.scrollLeft = item.left;
+    });
+    if (window.scrollX !== saved.x || window.scrollY !== saved.y) {
+      window.scrollTo(saved.x, saved.y);
+    }
+  }
+
   function render() {
-    const scroller = document.querySelector(".sheet-scroll");
-    if (scroller) scrollTop = scroller.scrollTop;
+    const generation = ++scrollGeneration;
+    const keep = keepScroll;
+    keepScroll = true;
+    const saved = keep ? captureScroll() : null;
+    const focus = document.activeElement;
+    if (focus && focus !== document.body && root.contains(focus)) focus.blur();
     root.innerHTML = state.screen === "play" ? renderPlay() : renderSetup();
-    root.insertAdjacentHTML("beforeend", renderModal() + renderToast());
-    const next = document.querySelector(".sheet-scroll");
-    if (next) next.scrollTop = scrollTop;
+    root.insertAdjacentHTML("beforeend", renderSettings() + renderModal() + renderToast());
+    applyScroll(saved);
+    // Removing the tapped control makes the browser snap scroll back to the
+    // top after this turn. Put the saved position back once that settles.
+    requestAnimationFrame(() => {
+      if (generation !== scrollGeneration) return;
+      applyScroll(saved);
+      requestAnimationFrame(() => {
+        if (generation !== scrollGeneration) return;
+        applyScroll(saved);
+      });
+    });
+  }
+
+  function revealRow(cardId) {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const row = document.getElementById("row-" + cardId);
+        if (row) row.scrollIntoView({ block: "nearest", inline: "nearest" });
+      });
+    });
   }
 
   function renderToast() {
     if (!state.toast) return "";
     return `<div class="toast" role="status">${esc(state.toast)}</div>`;
+  }
+
+  function renderSettings() {
+    if (!state.settingsOpen) return "";
+    const on = state.settings.showPercents;
+    return `
+      <div class="scrim" data-action="close-settings">
+        <section class="panel" data-action="stop">
+          <div class="panel-bar">
+            <h2>Settings</h2>
+            <button type="button" class="text-btn" data-action="close-settings" style="color:#241c14">Close</button>
+          </div>
+          <button type="button" class="setting-row${on ? " is-on" : ""}" data-action="toggle-percents" aria-pressed="${on}">
+            <span class="setting-copy">
+              <strong>Show percentages</strong>
+              <small>Chance numbers on open cards, and when you tap a card.</small>
+            </span>
+            <span class="setting-switch">${on ? "On" : "Off"}</span>
+          </button>
+        </section>
+      </div>`;
   }
 
   function renderModal() {
@@ -154,7 +250,7 @@
                 : '<button type="button" class="text-btn" data-action="setup-back">Back</button>'
             }
             <p class="step-label">Step ${index} of 3 · ${label}</p>
-            <span></span>
+            <button type="button" class="text-btn" data-action="show-settings">Settings</button>
           </div>
           <h1>Clue Sheet</h1>
           <p class="lede">${
@@ -280,6 +376,7 @@
             }
             <button type="button" class="text-btn" data-action="undo" ${canUndo ? "" : "disabled"}>Undo</button>
             <button type="button" class="text-btn" data-action="new-game">New</button>
+            <button type="button" class="text-btn" data-action="show-settings">Settings</button>
           </div>
         </header>
         <main class="sheet-scroll">
@@ -420,6 +517,13 @@
     }
     const nums = analysis.marks[playerId]?.[cardId] || [];
     const numbers = cornerNums(nums);
+    if (!state.settings.showPercents) {
+      return {
+        className: nums.length ? "is-maybe" : "is-empty",
+        html: numbers ? `<div class="box is-center nums-only">${numbers}</div>` : `<div class="box"></div>`,
+        label: nums.length ? `guesses ${nums.join(" and ")}` : "no mark yet",
+      };
+    }
     const pct = formatChance(chance);
     return {
       className: nums.length ? "is-maybe" : "is-empty",
@@ -459,6 +563,7 @@
     const owned = ownerTag(owner, game);
     if (owned === "Envelope") return { text: "Env", title: "In the envelope" };
     if (owned) return { text: owned, title: owned };
+    if (!state.settings.showPercents) return null;
     const value = envelopeChance(chances, game, cardId);
     if (value <= 0.0005 || value >= 0.9995) return null;
     const pct = formatChance(value);
@@ -528,13 +633,15 @@
     const reason = owner ? owner.reason : "It can still be in a hand, or it can be the envelope.";
     const envP = owner ? 0 : envelopeChance(chances, game, card.id);
     const envNote =
-      !owner && envP > 0.0005 && envP < 0.9995 ? ` ${formatChance(envP, true)} chance it is in the envelope.` : "";
+      state.settings.showPercents && !owner && envP > 0.0005 && envP < 0.9995
+        ? ` ${formatChance(envP, true)} chance it is in the envelope.`
+        : "";
     const rows = game.players
       .map((player) => {
-        const pct = formatChance(chances[player.id][card.id], true);
+        const pct = state.settings.showPercents ? `${formatChance(chances[player.id][card.id], true)}. ` : "";
         if (player.isYou) {
           const note = game.yourHand.includes(card.id) ? "In your hand." : "Not in your hand.";
-          return `<li><strong>${esc(player.name)}</strong><span>${esc(`${pct}. ${note}`)}</span></li>`;
+          return `<li><strong>${esc(player.name)}</strong><span>${esc(`${pct}${note}`)}</span></li>`;
         }
         const mark = cellMark(analysis, player.id, card.id, chances[player.id][card.id]);
         let note = "No mark yet.";
@@ -547,7 +654,7 @@
         else if (analysis.marks[player.id]?.[card.id]) {
           note = `Still possible from guess ${analysis.marks[player.id][card.id].join(" and ")}.`;
         }
-        return `<li><strong>${esc(player.name)}</strong><span>${esc(`${pct}. ${note}`)}</span></li>`;
+        return `<li><strong>${esc(player.name)}</strong><span>${esc(`${pct}${note}`)}</span></li>`;
       })
       .join("");
     return `
@@ -692,6 +799,9 @@
     return game.players.find((player) => player.id === id);
   }
 
+  root.addEventListener("mousedown", (event) => {
+    if (event.target.closest("button")) event.preventDefault();
+  });
   root.addEventListener("click", onClick);
   root.addEventListener("input", onInput);
 
@@ -751,13 +861,31 @@
         pendingId: null,
       };
       render();
-      const row = document.getElementById("row-" + target.dataset.focus);
-      if (row) row.scrollIntoView({ block: "nearest", inline: "nearest" });
+      revealRow(target.dataset.focus);
       return;
     }
     if (action === "show-history") {
       state.detailId = null;
+      state.settingsOpen = false;
       state.historyOpen = true;
+      render();
+      return;
+    }
+    if (action === "show-settings") {
+      state.detailId = null;
+      state.historyOpen = false;
+      state.settingsOpen = true;
+      render();
+      return;
+    }
+    if (action === "close-settings") {
+      state.settingsOpen = false;
+      render();
+      return;
+    }
+    if (action === "toggle-percents") {
+      state.settings.showPercents = !state.settings.showPercents;
+      saveSettings();
       render();
       return;
     }
@@ -790,8 +918,7 @@
       if (!target.dataset.card) return;
       state.detailId = null;
       render();
-      const row = document.getElementById("row-" + target.dataset.card);
-      if (row) row.scrollIntoView({ block: "nearest", inline: "nearest" });
+      revealRow(target.dataset.card);
       return;
     }
     if (action === "wizard-back") return wizardBack();
@@ -837,7 +964,7 @@
     });
     state.setup.error = "";
     state.setup.step = state.setup.step === "players" ? "hand" : "public";
-    scrollTop = 0;
+    keepScroll = false;
     save();
     render();
   }
@@ -911,7 +1038,7 @@
     state.game = created.game;
     state.screen = "play";
     state.setup.error = "";
-    scrollTop = 0;
+    keepScroll = false;
     save();
     render();
   }
@@ -932,7 +1059,7 @@
     state.detailId = null;
     flashCards(["library"]);
     showToast("Walkthrough: Karen has the Library. Guess 1's other number was crossed out.");
-    scrollTop = 0;
+    keepScroll = false;
     save();
     render();
   }
@@ -981,7 +1108,7 @@
       publicCards: [],
       error: "",
     };
-    scrollTop = 0;
+    keepScroll = false;
     save();
     render();
   }
@@ -1035,8 +1162,7 @@
       wizard.pendingId = playerId;
       wizard.responses = [];
       render();
-      const row = document.getElementById("row-" + wizard.suspectId);
-      if (row) row.scrollIntoView({ block: "nearest", inline: "nearest" });
+      revealRow(wizard.suspectId);
       return;
     }
     wizard.pendingId = null;
