@@ -441,8 +441,11 @@
         return `<th class="player${player.isYou ? " is-you" : ""}" style="--player:${colors[index % colors.length]}" aria-label="${esc(player.name + (player.isYou ? ", you" : ""))}"><span class="col-name">${esc(player.name)}</span></th>`;
       })
       .join("");
+    const needed = neededCategories();
     const body = E.CATEGORIES.map((category) => {
-      const label = `<tr class="cat-row"><th class="name-cell">${esc(category.label)}</th>${players
+      const waiting = needed.has(category.id);
+      const catLabel = waiting ? `Tap a ${category.singular}` : category.label;
+      const label = `<tr class="cat-row${waiting ? " is-needed" : ""}"><th class="name-cell">${esc(catLabel)}</th>${players
         .map((player) => `<th${player.isYou ? ' class="is-you"' : ""}></th>`)
         .join("")}</tr>`;
       const rows = category.cards
@@ -456,6 +459,7 @@
           if (owner?.kind === "player") classes.push("is-held");
           if (state.flash.includes(card.id)) classes.push("is-flash");
           const rowAction = state.wizard ? "pick-row" : "detail";
+          if (waiting) classes.push("is-needed");
           if (state.wizard) classes.push(...rowLogClasses(card.id));
           const cells = players
             .map((player) => {
@@ -687,13 +691,17 @@
     const wizard = state.wizard;
     const cardsReady = Boolean(wizard.suspectId && wizard.weaponId && wizard.roomId);
     const asker = wizard.suggesterId ? playerById(game, wizard.suggesterId) : null;
-    const pickingCards = !wizard.pendingId && !(cardsReady && asker);
+    const missing = missingAsked(wizard);
+    const pickingAsked = Boolean(asker) && !wizard.pendingId && missing.length > 0;
     const askers = game.players
       .map((player) => {
         const on = player.id === wizard.suggesterId;
         return `<button type="button" class="chip${on ? " is-on" : ""}" data-action="pick-suggester" data-id="${esc(player.id)}" aria-pressed="${on}">${esc(player.name)}</button>`;
       })
       .join("");
+    const body = asker
+      ? renderShowerRow(game, analysis)
+      : `<div class="dock-row">${askers}</div>`;
     return `
       <div class="dock">
         <div class="dock-head">
@@ -701,9 +709,46 @@
           <span class="dock-title">${esc(dockTitle(game, asker, cardsReady))}</span>
           <button type="button" class="text-btn" data-action="wizard-back">Back</button>
         </div>
+        ${pickingAsked ? renderAskedPrompt(missing) : ""}
         ${wizard.pendingId ? "" : renderSlots(wizard)}
-        ${pickingCards ? `<div class="dock-row">${askers}</div>` : renderShowerRow(game, analysis)}
+        ${pickingAsked ? renderAskerLine(asker) : body}
       </div>`;
+  }
+
+  function missingAsked(wizard) {
+    const missing = [];
+    if (!wizard.suspectId) missing.push("suspect");
+    if (!wizard.weaponId) missing.push("weapon");
+    if (!wizard.roomId) missing.push("room");
+    return missing;
+  }
+
+  function neededCategories() {
+    const wizard = state.wizard;
+    const needed = new Set();
+    if (!wizard || wizard.pendingId || !wizard.suggesterId) return needed;
+    if (!wizard.suspectId) needed.add("suspects");
+    if (!wizard.weaponId) needed.add("weapons");
+    if (!wizard.roomId) needed.add("rooms");
+    return needed;
+  }
+
+  function renderAskedPrompt(missing) {
+    const what =
+      missing.length === 1
+        ? `the ${missing[0]}`
+        : missing.length === 2
+          ? `the ${missing[0]} and the ${missing[1]}`
+          : "the suspect, weapon, and room";
+    return `
+      <p class="dock-prompt" role="status">
+        <span class="dock-up" aria-hidden="true">↑</span>
+        <span>Tap ${what} on the sheet above.</span>
+      </p>`;
+  }
+
+  function renderAskerLine(asker) {
+    return `<p class="dock-asker">${esc(asker.name)} asked <button type="button" class="text-btn" data-action="clear-suggester">Change</button></p>`;
   }
 
   function renderSlots(wizard) {
@@ -743,7 +788,9 @@
     if (wizard.pendingId) return `Which card did ${playerById(game, wizard.pendingId).name} show?`;
     if (asker && cardsReady) return "Who showed a card?";
     if (!asker) return "Who asked?";
-    return `${asker.name} asked`;
+    const missing = missingAsked(wizard);
+    if (missing.length === 1) return `Tap the ${missing[0]} above`;
+    return "Tap the cards above";
   }
 
   function cardShort(cardId, fallback) {
@@ -922,6 +969,13 @@
       return;
     }
     if (action === "wizard-back") return wizardBack();
+    if (action === "clear-suggester") {
+      state.wizard.suggesterId = null;
+      state.wizard.pendingId = null;
+      state.wizard.responses = [];
+      render();
+      return;
+    }
     if (action === "pick-suggester") {
       state.wizard.suggesterId = target.dataset.id;
       state.wizard.pendingId = null;

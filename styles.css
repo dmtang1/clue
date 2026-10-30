@@ -501,6 +501,24 @@ tr.is-picked .name-cell { box-shadow: inset 4px 0 0 #163e73, 1px 0 0 #e3d9c6; }
 
 tr.is-asked .name-cell { box-shadow: inset 4px 0 0 #1c6b42, 1px 0 0 #e3d9c6; }
 
+.paper.is-logging tr.cat-row.is-needed th,
+.paper.is-logging tr.cat-row.is-needed th.is-you {
+  background: #f3e2b0;
+  color: #6d5014;
+}
+
+.paper.is-logging tr.card-row.is-needed .name-cell,
+.paper.is-logging tr.card-row.is-needed td,
+.paper.is-logging tr.card-row.is-needed td.mark.is-you,
+.paper.is-logging tr.card-row.is-needed td.mark.is-you.is-has,
+.paper.is-logging tr.card-row.is-needed td.mark.is-you.is-maybe {
+  background-color: #fff8dc;
+}
+
+.paper.is-logging tr.card-row.is-needed .name-cell {
+  box-shadow: inset 3px 0 0 #a6843d, 1px 0 0 #e3d9c6;
+}
+
 tr.is-flash td { animation: clue-flash 1.6s ease; }
 
 @keyframes clue-flash {
@@ -783,6 +801,44 @@ tr.is-flash td { animation: clue-flash 1.6s ease; }
   line-height: 1.3;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.dock-prompt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 2px 0 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--gold);
+  color: #2a2112;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.dock-up {
+  flex: none;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+.dock-asker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dock-asker .text-btn {
+  min-height: 28px;
+  margin-left: auto;
+  padding: 0 2px;
+  color: var(--gold);
 }
 
 .guess-list {
